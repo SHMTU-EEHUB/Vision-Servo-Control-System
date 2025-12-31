@@ -13,6 +13,49 @@ import sys
 import random
 import argparse
 from pathlib import Path
+from datetime import datetime
+import os
+
+
+# ==========================================
+# 配置参数 - 在这里修改测试参数
+# ==========================================
+DEFAULT_TEST_COUNT = 20  # 默认生成的测试图片数量
+DEFAULT_USE_RANDOM = True  # 默认使用随机生成模式 (True) 或预定义场景 (False)
+DEFAULT_INTERVAL = 1.0  # 默认测试间隔时间（秒）
+
+# 目录配置
+TEST_OUTPUT_DIR = "test_output"
+TEST_IMAGES_DIR = "test_images"
+DEBUG_IMAGES_DIR = "debug_images"
+
+
+def setup_directories():
+    """
+    创建测试输出目录结构
+
+    Returns:
+        dict: 包含各个目录路径的字典
+    """
+    # 创建带时间戳的输出目录
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    session_dir = Path(TEST_OUTPUT_DIR) / f"session_{timestamp}"
+
+    # 创建子目录
+    images_dir = session_dir / TEST_IMAGES_DIR
+    debug_dir = session_dir / DEBUG_IMAGES_DIR
+
+    # 确保目录存在
+    images_dir.mkdir(parents=True, exist_ok=True)
+    debug_dir.mkdir(parents=True, exist_ok=True)
+
+    dirs = {"session": session_dir, "images": images_dir, "debug": debug_dir}
+
+    print(f"✓ 创建测试目录: {session_dir}")
+    print(f"  - 测试图像: {images_dir}")
+    print(f"  - 调试图像: {debug_dir}")
+
+    return dirs
 
 
 def generate_test_image(
@@ -87,10 +130,11 @@ def generate_test_image(
         )
 
     # 保存图像
-    cv2.imwrite(filename, image)
+    filepath = Path(filename)
+    cv2.imwrite(str(filepath), image)
 
     # 返回绝对路径
-    return str(Path(filename).absolute())
+    return str(filepath.absolute())
 
 
 def generate_random_scenarios(num_scenarios=10, width=640, height=480):
@@ -208,10 +252,18 @@ def main():
     # 解析命令行参数
     parser = argparse.ArgumentParser(description="视觉伺服控制系统测试程序")
     parser.add_argument(
-        "--random", "-r", action="store_true", help="使用随机生成的测试场景"
+        "--random",
+        "-r",
+        action="store_true",
+        default=DEFAULT_USE_RANDOM,
+        help=f"使用随机生成的测试场景 (默认: {DEFAULT_USE_RANDOM})",
     )
     parser.add_argument(
-        "--count", "-n", type=int, default=10, help="随机生成的场景数量（默认：10）"
+        "--count",
+        "-n",
+        type=int,
+        default=DEFAULT_TEST_COUNT,
+        help=f"随机生成的场景数量（默认：{DEFAULT_TEST_COUNT}）",
     )
     parser.add_argument(
         "--continuous", "-c", action="store_true", help="连续模式：持续生成随机场景"
@@ -220,8 +272,8 @@ def main():
         "--interval",
         "-i",
         type=float,
-        default=1.0,
-        help="连续模式下每个场景的间隔时间（秒，默认：1.0）",
+        default=DEFAULT_INTERVAL,
+        help=f"连续模式下每个场景的间隔时间（秒，默认：{DEFAULT_INTERVAL}）",
     )
     parser.add_argument(
         "--seed", "-s", type=int, default=None, help="随机种子（用于可重复的随机生成）"
@@ -243,6 +295,9 @@ def main():
     else:
         print("模式: 预定义场景")
     print("=" * 60)
+
+    # 创建输出目录
+    dirs = setup_directories()
 
     # 定义或生成测试场景
     if args.random:
@@ -297,11 +352,13 @@ def main():
     image_paths = []
     for scenario in scenarios:
         yellow_radius = scenario.get("yellow_radius", 40)
+        # 将图像保存到测试图像目录
+        filename = dirs["images"] / scenario["filename"]
         image_path = generate_test_image(
             red_pos=scenario["red_pos"],
             yellow_pos=scenario["yellow_pos"],
             yellow_radius=yellow_radius,
-            filename=scenario["filename"],
+            filename=str(filename),
         )
         image_paths.append((scenario["name"], image_path))
         print(f"  ✓ {scenario['filename']}")
@@ -352,16 +409,19 @@ def main():
             # 等待处理（使用命令行参数指定的间隔时间）
             time.sleep(args.interval)
 
-            # 尝试读取控制指令
+            # 尝试读取控制指令（添加超时保护）
             try:
-                # 使用 readline 可能会阻塞，这里只是尝试
+                # Windows: 简单的超时读取
+                time.sleep(0.1)  # 给一点时间让输出到达
                 command = process.stdout.readline().strip()
+                
                 if command:
                     print(f"→ 控制指令: {command}")
                 else:
-                    print("→ (未收到指令)")
+                    print("→ (未收到指令或HOLD)")
             except Exception as e:
                 print(f"→ (读取指令时出错: {e})")
+                # 继续执行，不中断测试
 
             # 检查 stderr 是否有日志输出
             # 注意：这里只是示例，实际可能需要异步读取
@@ -369,8 +429,12 @@ def main():
         print("\n" + "=" * 60)
         print("测试完成")
         print("=" * 60)
-        print(f"\n生成的测试图像和 debug.jpg 已保存在当前目录")
-        print(f"请查看 debug.jpg 以查看最后一个场景的处理结果")
+        print(f"\n所有输出文件已保存到: {dirs['session']}")
+        print(f"  - 测试图像: {dirs['images']}")
+        print(f"  - 调试图像: debug.jpg (当前目录)")
+        print(
+            f"\n注意: main.py 生成的 debug.jpg 仍在当前目录，请手动查看或移动到 {dirs['debug']}"
+        )
 
         # 关闭子进程
         print("\n正在关闭 main.py...")
@@ -394,7 +458,11 @@ def main():
         traceback.print_exc()
         return 1
 
-    print("\n测试程序结束\n")
+    print("\n" + "=" * 60)
+    print("测试程序结束")
+    if "dirs" in locals():
+        print(f"测试会话目录: {dirs['session']}")
+    print("=" * 60 + "\n")
     return 0
 
 
