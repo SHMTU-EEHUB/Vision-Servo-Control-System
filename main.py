@@ -185,10 +185,6 @@ def calculate_control_vector(
     vx, vy = 0.0, 0.0
     target_distance = 0
 
-    # 定义距离阈值
-    FAST_APPROACH_THRESHOLD = 150  # 大于此距离时快速接近（扩大范围以保持更久高速）
-    FINE_TUNE_THRESHOLD = 30  # 小于此距离时精确微调
-
     # 1. 红色目标产生引力（吸引云台中心靠近）
     if red_pos is not None:
         red_cx, red_cy = red_pos
@@ -198,84 +194,113 @@ def calculate_control_vector(
         target_distance = np.sqrt(dx**2 + dy**2)
 
         if target_distance > 0:
-            # === 分阶段控制策略 ===
-            if target_distance > FAST_APPROACH_THRESHOLD:
-                # 阶段1：极限速度模式 - 1步直接到达目标区域
-                # 使用极限力度快速接近
-                attraction_force = 2000.0  # 极限力度，1步到达
-                vx = attraction_force * (dx / target_distance)
-                vy = attraction_force * (dy / target_distance)
-
-                # Task 1时完全关闭避障，其他任务保留基本避让
-                if TASK_ID != 1 and yellow_pos is not None:
-                    yellow_cx, yellow_cy = yellow_pos
-                    dy_obs = center_y - yellow_cy
-                    dx_obs = center_x - yellow_cx
-                    obs_distance = np.sqrt(dx_obs**2 + dy_obs**2)
-
-                    # 只在极近距离才避让
-                    if obs_distance < 60:
-                        repulsion = 50.0 / max(obs_distance, 15)
-                        vx += repulsion * (dx_obs / obs_distance)
-                        vy += repulsion * (dy_obs / obs_distance)
-
-            elif target_distance > FINE_TUNE_THRESHOLD:
-                # 阶段2：快速平衡模式 - 快速移动 + 避障
-                attraction_force = min(
-                    target_distance / 20.0, 120.0
-                )  # 进一步提高上限和响应速度
-                vx = attraction_force * (dx / target_distance)
-                vy = attraction_force * (dy / target_distance)
-
-                # Task 1时关闭避障，其他任务保留中等强度的障碍物避让
-                if TASK_ID != 1 and yellow_pos is not None:
-                    yellow_cx, yellow_cy = yellow_pos
-                    dy_obs = center_y - yellow_cy
-                    dx_obs = center_x - yellow_cx
-                    obs_distance = np.sqrt(dx_obs**2 + dy_obs**2)
-
-                    if obs_distance > 0:
-                        area_factor = min(yellow_area / 1000.0, 3.0)
-                        repulsion_force = (200.0 / max(obs_distance, 50)) * (
-                            1 + area_factor
-                        )
-                        repulsion_force = min(repulsion_force, 12.0)
-
-                        vx += repulsion_force * (dx_obs / obs_distance)
-                        vy += repulsion_force * (dy_obs / obs_distance)
-
+            # === Task 1: 纯比例控制，最简单最快 ===
+            if TASK_ID == 1:
+                # 直接使用偏移量作为控制向量
+                # 距离大→向量大→移动快；距离小→向量小→移动慢
+                # 自然收敛，无过冲
+                vx = float(dx)
+                vy = float(dy)
+            
+            # === Task 2: 极保守比例控制，杜绝过冲 ===
+            elif TASK_ID == 2:
+                # 五段式超保守增益，确保平滑减速
+                if target_distance > 100:
+                    # 远距离：温和加速
+                    gain = 1.5
+                elif target_distance > 50:
+                    # 中远距离：开始减速
+                    gain = 1.0
+                elif target_distance > 25:
+                    # 中距离：持续减速
+                    gain = 0.6
+                elif target_distance > 10:
+                    # 近距离：极小增益
+                    gain = 0.4
+                else:
+                    # 极近距离：微调模式
+                    gain = 0.25
+                
+                vx = gain * float(dx)
+                vy = gain * float(dy)
+            
             else:
-                # 阶段3：精确微调模式 - 完整势场法
-                attraction_force = min(target_distance / 80.0, 12.0)  # 中等力度
-                vx = attraction_force * (dx / target_distance)
-                vy = attraction_force * (dy / target_distance)
+                # === Task 3等：使用势场法 + 避障 ===
+                # 定义距离阈值
+                FAST_APPROACH_THRESHOLD = 150
+                FINE_TUNE_THRESHOLD = 30
+                
+                if target_distance > FAST_APPROACH_THRESHOLD:
+                    # 阶段1：极限速度模式
+                    attraction_force = 2000.0
+                    vx = attraction_force * (dx / target_distance)
+                    vy = attraction_force * (dy / target_distance)
 
-                # Task 1时关闭避障，其他任务使用完整的势场法避障
-                if TASK_ID != 1 and yellow_pos is not None:
-                    yellow_cx, yellow_cy = yellow_pos
-                    dy_obs = center_y - yellow_cy
-                    dx_obs = center_x - yellow_cx
-                    obs_distance = np.sqrt(dx_obs**2 + dy_obs**2)
+                    # 障碍物避让
+                    if yellow_pos is not None:
+                        yellow_cx, yellow_cy = yellow_pos
+                        dy_obs = center_y - yellow_cy
+                        dx_obs = center_x - yellow_cx
+                        obs_distance = np.sqrt(dx_obs**2 + dy_obs**2)
 
-                    if obs_distance > 0:
-                        area_factor = min(yellow_area / 800.0, 4.0)
-                        repulsion_force = (300.0 / max(obs_distance, 40)) * (
-                            1 + area_factor
-                        )
-                        repulsion_force = min(repulsion_force, 15.0)
+                        if obs_distance < 60:
+                            repulsion = 50.0 / max(obs_distance, 15)
+                            vx += repulsion * (dx_obs / obs_distance)
+                            vy += repulsion * (dy_obs / obs_distance)
 
-                        vx += repulsion_force * (dx_obs / obs_distance)
-                        vy += repulsion_force * (dy_obs / obs_distance)
+                elif target_distance > FINE_TUNE_THRESHOLD:
+                    # 阶段2：快速平衡模式
+                    attraction_force = min(target_distance / 20.0, 120.0)
+                    vx = attraction_force * (dx / target_distance)
+                    vy = attraction_force * (dy / target_distance)
 
-                        # 大面积障碍物增强
-                        image_area = image_width * image_height
-                        yellow_ratio = yellow_area / image_area
-                        if yellow_ratio > 0.1:
-                            vx *= 2.5
-                            vy *= 2.5
-                        elif yellow_ratio > 0.05:
-                            vx *= 1.5
-                            vy *= 1.5
+                    if yellow_pos is not None:
+                        yellow_cx, yellow_cy = yellow_pos
+                        dy_obs = center_y - yellow_cy
+                        dx_obs = center_x - yellow_cx
+                        obs_distance = np.sqrt(dx_obs**2 + dy_obs**2)
+
+                        if obs_distance > 0:
+                            area_factor = min(yellow_area / 1000.0, 3.0)
+                            repulsion_force = (200.0 / max(obs_distance, 50)) * (
+                                1 + area_factor
+                            )
+                            repulsion_force = min(repulsion_force, 12.0)
+
+                            vx += repulsion_force * (dx_obs / obs_distance)
+                            vy += repulsion_force * (dy_obs / obs_distance)
+
+                else:
+                    # 阶段3：精确微调模式
+                    attraction_force = min(target_distance / 80.0, 12.0)
+                    vx = attraction_force * (dx / target_distance)
+                    vy = attraction_force * (dy / target_distance)
+
+                    if yellow_pos is not None:
+                        yellow_cx, yellow_cy = yellow_pos
+                        dy_obs = center_y - yellow_cy
+                        dx_obs = center_x - yellow_cx
+                        obs_distance = np.sqrt(dx_obs**2 + dy_obs**2)
+
+                        if obs_distance > 0:
+                            area_factor = min(yellow_area / 800.0, 4.0)
+                            repulsion_force = (300.0 / max(obs_distance, 40)) * (
+                                1 + area_factor
+                            )
+                            repulsion_force = min(repulsion_force, 15.0)
+
+                            vx += repulsion_force * (dx_obs / obs_distance)
+                            vy += repulsion_force * (dy_obs / obs_distance)
+
+                            # 大面积障碍物增强
+                            image_area = image_width * image_height
+                            yellow_ratio = yellow_area / image_area
+                            if yellow_ratio > 0.1:
+                                vx *= 2.5
+                                vy *= 2.5
+                            elif yellow_ratio > 0.05:
+                                vx *= 1.5
+                                vy *= 1.5
     else:
         # 没有目标时，只做避障
         if yellow_pos is not None:
@@ -305,23 +330,26 @@ def send_control_command(vx, vy, distance, threshold=0.3):
         distance: 与目标的距离
         threshold: 触发指令的基础阈值
     """
-    # 根据距离动态调整阈值 - 距离越近，阈值越低，越灵敏
-    # 极低的阈值确保几乎任何偏移都会触发移动
-    if distance > 100:
-        # 远距离：极低阈值，确保持续移动
-        adjusted_threshold = 0.001
-    elif distance > 50:
-        # 中远距离：极低阈值
-        adjusted_threshold = 0.002
-    elif distance > 20:
-        # 中距离：极低阈值
-        adjusted_threshold = 0.003
-    elif distance > 5:
-        # 近距离：非常低的阈值，确保精确对准
-        adjusted_threshold = 0.005
+    # Task 1: 像素级阈值 - 避免抖动浪费步数
+    if TASK_ID == 1:
+        # 偏离>=1像素才移动，避免在目标附近来回抖动
+        adjusted_threshold = 1.0
+    # Task 2: 适中阈值 - 平衡精度与步数
+    elif TASK_ID == 2:
+        # 使用1.5像素阈值，避免过冲但不过度微调
+        adjusted_threshold = 1.5
     else:
-        # 极近距离：几乎为0的阈值，只要有偏移就移动
-        adjusted_threshold = 0.001
+        # 其他任务：根据距离动态调整阈值
+        if distance > 100:
+            adjusted_threshold = 0.001
+        elif distance > 50:
+            adjusted_threshold = 0.002
+        elif distance > 20:
+            adjusted_threshold = 0.003
+        elif distance > 5:
+            adjusted_threshold = 0.005
+        else:
+            adjusted_threshold = 0.001
 
     # 优先处理较大的分量
     abs_vx = abs(vx)
@@ -553,7 +581,7 @@ def main():
     global TASK_ID
 
     # 从命令行参数读取任务ID（可选）
-    task_id = 1  # 默认任务1（发挥部分：避障）
+    task_id = 3  # 默认任务1（发挥部分：避障）
     debug_mode = True  # 默认开启调试
 
     if len(sys.argv) > 1:
