@@ -10,6 +10,8 @@ import numpy as np
 import subprocess
 import time
 import sys
+import random
+import argparse
 from pathlib import Path
 
 
@@ -91,6 +93,83 @@ def generate_test_image(
     return str(Path(filename).absolute())
 
 
+def generate_random_scenarios(num_scenarios=10, width=640, height=480):
+    """
+    随机生成测试场景
+
+    Args:
+        num_scenarios: 要生成的场景数量
+        width: 图像宽度
+        height: 图像高度
+
+    Returns:
+        list: 包含场景配置的列表
+    """
+    scenarios = []
+
+    # 边界边距（避免物体太靠近边缘）
+    margin = 80
+
+    for i in range(num_scenarios):
+        scenario = {"name": f"随机场景{i+1}", "filename": f"random_test_{i+1}.jpg"}
+
+        # 随机决定是否有红色目标（90%概率）
+        if random.random() < 0.9:
+            red_x = random.randint(margin, width - margin)
+            red_y = random.randint(margin, height - margin)
+            scenario["red_pos"] = (red_x, red_y)
+            scenario["red_radius"] = random.randint(20, 40)
+        else:
+            scenario["red_pos"] = None
+
+        # 随机决定是否有黄色障碍物（70%概率）
+        if random.random() < 0.7:
+            # 确保黄色障碍物不与红色目标重叠
+            attempts = 0
+            while attempts < 10:
+                yellow_x = random.randint(margin, width - margin)
+                yellow_y = random.randint(margin, height - margin)
+                yellow_radius = random.randint(30, 80)
+
+                # 检查是否与红色目标距离足够远
+                if scenario["red_pos"] is None:
+                    break
+
+                red_x, red_y = scenario["red_pos"]
+                distance = np.sqrt((yellow_x - red_x) ** 2 + (yellow_y - red_y) ** 2)
+                min_distance = yellow_radius + scenario.get("red_radius", 30) + 20
+
+                if distance > min_distance:
+                    break
+                attempts += 1
+
+            scenario["yellow_pos"] = (yellow_x, yellow_y)
+            scenario["yellow_radius"] = yellow_radius
+        else:
+            scenario["yellow_pos"] = None
+
+        # 添加场景描述
+        desc_parts = []
+        if scenario["red_pos"]:
+            desc_parts.append(
+                f"红色@({scenario['red_pos'][0]},{scenario['red_pos'][1]})"
+            )
+        else:
+            desc_parts.append("无红色目标")
+
+        if scenario["yellow_pos"]:
+            desc_parts.append(
+                f"黄色@({scenario['yellow_pos'][0]},{scenario['yellow_pos'][1]})"
+            )
+        else:
+            desc_parts.append("无障碍物")
+
+        scenario["name"] = f"随机场景{i+1}: {', '.join(desc_parts)}"
+        scenarios.append(scenario)
+
+    return scenarios
+
+
 def run_test_scenario(process, image_path, scenario_name):
     """
     运行单个测试场景
@@ -126,51 +205,92 @@ def main():
     """
     主测试函数
     """
+    # 解析命令行参数
+    parser = argparse.ArgumentParser(description="视觉伺服控制系统测试程序")
+    parser.add_argument(
+        "--random", "-r", action="store_true", help="使用随机生成的测试场景"
+    )
+    parser.add_argument(
+        "--count", "-n", type=int, default=10, help="随机生成的场景数量（默认：10）"
+    )
+    parser.add_argument(
+        "--continuous", "-c", action="store_true", help="连续模式：持续生成随机场景"
+    )
+    parser.add_argument(
+        "--interval",
+        "-i",
+        type=float,
+        default=1.0,
+        help="连续模式下每个场景的间隔时间（秒，默认：1.0）",
+    )
+    parser.add_argument(
+        "--seed", "-s", type=int, default=None, help="随机种子（用于可重复的随机生成）"
+    )
+    args = parser.parse_args()
+
+    # 设置随机种子
+    if args.seed is not None:
+        random.seed(args.seed)
+        np.random.seed(args.seed)
+        print(f"随机种子: {args.seed}")
+
     print("=" * 60)
     print("视觉伺服控制系统 - 测试程序")
+    if args.random:
+        print("模式: 随机生成")
+        if args.continuous:
+            print("类型: 连续随机生成")
+    else:
+        print("模式: 预定义场景")
     print("=" * 60)
 
-    # 定义测试场景
-    scenarios = [
-        {
-            "name": "场景1: 红色目标在右上方",
-            "red_pos": (500, 150),
-            "yellow_pos": None,
-            "filename": "test_scenario_1.jpg",
-        },
-        {
-            "name": "场景2: 红色目标在左下方",
-            "red_pos": (150, 350),
-            "yellow_pos": None,
-            "filename": "test_scenario_2.jpg",
-        },
-        {
-            "name": "场景3: 红色目标居中，黄色障碍物在左侧",
-            "red_pos": (320, 240),
-            "yellow_pos": (150, 240),
-            "filename": "test_scenario_3.jpg",
-        },
-        {
-            "name": "场景4: 红色在右侧，黄色障碍物在中间偏左",
-            "red_pos": (500, 240),
-            "yellow_pos": (280, 240),
-            "filename": "test_scenario_4.jpg",
-        },
-        {
-            "name": "场景5: 红色在上方，黄色障碍物在中心（大面积）",
-            "red_pos": (320, 100),
-            "yellow_pos": (320, 300),
-            "yellow_radius": 80,
-            "filename": "test_scenario_5.jpg",
-        },
-        {
-            "name": "场景6: 复杂场景 - 红色右下，黄色中间",
-            "red_pos": (450, 350),
-            "yellow_pos": (320, 200),
-            "yellow_radius": 60,
-            "filename": "test_scenario_6.jpg",
-        },
-    ]
+    # 定义或生成测试场景
+    if args.random:
+        # 随机生成场景
+        print(f"\n随机生成 {args.count} 个测试场景...")
+        scenarios = generate_random_scenarios(num_scenarios=args.count)
+    else:
+        # 预定义测试场景
+        scenarios = [
+            {
+                "name": "场景1: 红色目标在右上方",
+                "red_pos": (500, 150),
+                "yellow_pos": None,
+                "filename": "test_scenario_1.jpg",
+            },
+            {
+                "name": "场景2: 红色目标在左下方",
+                "red_pos": (150, 350),
+                "yellow_pos": None,
+                "filename": "test_scenario_2.jpg",
+            },
+            {
+                "name": "场景3: 红色目标居中，黄色障碍物在左侧",
+                "red_pos": (320, 240),
+                "yellow_pos": (150, 240),
+                "filename": "test_scenario_3.jpg",
+            },
+            {
+                "name": "场景4: 红色在右侧，黄色障碍物在中间偏左",
+                "red_pos": (500, 240),
+                "yellow_pos": (280, 240),
+                "filename": "test_scenario_4.jpg",
+            },
+            {
+                "name": "场景5: 红色在上方，黄色障碍物在中心（大面积）",
+                "red_pos": (320, 100),
+                "yellow_pos": (320, 300),
+                "yellow_radius": 80,
+                "filename": "test_scenario_5.jpg",
+            },
+            {
+                "name": "场景6: 复杂场景 - 红色右下，黄色中间",
+                "red_pos": (450, 350),
+                "yellow_pos": (320, 200),
+                "yellow_radius": 60,
+                "filename": "test_scenario_6.jpg",
+            },
+        ]
 
     # 生成所有测试图像
     print("\n生成测试图像...")
@@ -229,8 +349,8 @@ def main():
             process.stdin.write(image_path + "\n")
             process.stdin.flush()
 
-            # 等待处理
-            time.sleep(1.0)
+            # 等待处理（使用命令行参数指定的间隔时间）
+            time.sleep(args.interval)
 
             # 尝试读取控制指令
             try:
