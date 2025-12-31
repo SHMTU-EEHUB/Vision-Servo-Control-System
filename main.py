@@ -11,15 +11,17 @@ import numpy as np
 from pathlib import Path
 import os
 import gc
+import time
 
 # 配置选项
 SAVE_DEBUG_IMAGE = False  # 是否保存调试图像
 DEBUG_IMAGE_INTERVAL = 10  # 每N张保存一次调试图像（0表示每张都保存）
-VERBOSE_LOG = False  # 是否输出详细日志
+VERBOSE_LOG = True  # 是否输出详细日志
 DELETE_PNG_AFTER_PROCESS = True  # 是否在处理后删除PNG文件
 
 # 全局计数器
 image_count = 0
+TASK_ID = 1  # 当前任务ID，用于控制是否开启避障
 
 
 def log(msg):
@@ -48,8 +50,9 @@ def handshake(task_id=1, debug=True):
         task_id: 任务ID (0/1/2/3)
         debug: 是否开启调试模式
     """
-    debug_mode = "true" if debug else "false"
-    print(f"debug={debug_mode}", flush=True)
+    # debug_mode = "true" if debug else "false"
+    # log("Debug mode: " + debug_mode)
+    print(f"debug=true", flush=True)
     print(f"task {task_id}", flush=True)
 
 
@@ -103,13 +106,13 @@ def detect_yellow_obstacle(image):
 
 def detect_red_target(image):
     """
-    检测图像中的红色标靶
+    检测图像中的红色标靶，使用最小外接圆找到真正的圆心
 
     Args:
         image: OpenCV 读取的图像（BGR格式）
 
     Returns:
-        tuple: (cx, cy, contour) - 质心坐标和最大轮廓，如果未找到则返回 (None, None, None)
+        tuple: (cx, cy, contour) - 圆心坐标和最大轮廓，如果未找到则返回 (None, None, None)
     """
     # 1. 转换到 HSV 色彩空间
     hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
@@ -149,13 +152,11 @@ def detect_red_target(image):
     if area < 100:
         return None, None, None
 
-    # 7. 计算质心（使用图像矩）
-    M = cv2.moments(max_contour)
-    if M["m00"] == 0:
-        return None, None, None
-
-    cx = int(M["m10"] / M["m00"])
-    cy = int(M["m01"] / M["m00"])
+    # 7. 使用最小外接圆找到靶标的真正圆心（适用于同心圆靶标）
+    # 这比质心方法更准确，能精确定位到圆形靶标的中心
+    (circle_x, circle_y), radius = cv2.minEnclosingCircle(max_contour)
+    cx = int(circle_x)
+    cy = int(circle_y)
 
     return cx, cy, max_contour
 
@@ -164,7 +165,7 @@ def calculate_control_vector(
     image_width, image_height, red_pos, yellow_pos, yellow_area
 ):
     """
-    使用势场法计算控制向量
+    使用分阶段控制策略：远距离快速接近，近距离势场法微调
 
     Args:
         image_width: 图像宽度
@@ -174,7 +175,7 @@ def calculate_control_vector(
         yellow_area: 黄色障碍物面积
 
     Returns:
-        tuple: (vx, vy) - 控制向量（x方向和y方向的力）
+        tuple: (vx, vy, distance) - 控制向量（x方向和y方向的力）和距离
     """
     # 图像中心坐标
     center_x = image_width // 2
@@ -182,6 +183,11 @@ def calculate_control_vector(
 
     # 初始化控制向量
     vx, vy = 0.0, 0.0
+    target_distance = 0
+
+    # 定义距离阈值
+    FAST_APPROACH_THRESHOLD = 150  # 大于此距离时快速接近（扩大范围以保持更久高速）
+    FINE_TUNE_THRESHOLD = 30  # 小于此距离时精确微调
 
     # 1. 红色目标产生引力（吸引云台中心靠近）
     if red_pos is not None:
@@ -189,75 +195,164 @@ def calculate_control_vector(
         # 计算从中心指向红色目标的向量
         dx = red_cx - center_x
         dy = red_cy - center_y
-        distance = np.sqrt(dx**2 + dy**2)
+        target_distance = np.sqrt(dx**2 + dy**2)
 
-        if distance > 0:
-            # 引力大小与距离成正比（距离越远，引力越大）
-            attraction_force = min(distance / 100.0, 30.0)  # 增大引力系数和上限
-            vx += attraction_force * (dx / distance)
-            vy += attraction_force * (dy / distance)
+        if target_distance > 0:
+            # === 分阶段控制策略 ===
+            if target_distance > FAST_APPROACH_THRESHOLD:
+                # 阶段1：极限速度模式 - 1步直接到达目标区域
+                # 使用极限力度快速接近
+                attraction_force = 2000.0  # 极限力度，1步到达
+                vx = attraction_force * (dx / target_distance)
+                vy = attraction_force * (dy / target_distance)
 
-    # 2. 黄色障碍物产生斥力（排斥远离）
-    if yellow_pos is not None:
-        yellow_cx, yellow_cy = yellow_pos
-        # 计算从黄色障碍物指向中心的向量（斥力方向）
-        dx = center_x - yellow_cx
-        dy = center_y - yellow_cy
-        distance = np.sqrt(dx**2 + dy**2)
+                # Task 1时完全关闭避障，其他任务保留基本避让
+                if TASK_ID != 1 and yellow_pos is not None:
+                    yellow_cx, yellow_cy = yellow_pos
+                    dy_obs = center_y - yellow_cy
+                    dx_obs = center_x - yellow_cx
+                    obs_distance = np.sqrt(dx_obs**2 + dy_obs**2)
 
-        if distance > 0:
-            # 斥力与距离成反比（距离越近，斥力越大）
-            # 同时考虑障碍物面积，面积越大斥力越强
-            area_factor = min(yellow_area / 800.0, 4.0)  # 增强面积影响
-            repulsion_force = (300.0 / max(distance, 40)) * (1 + area_factor)
-            repulsion_force = min(repulsion_force, 15.0)  # 增大最大斥力
+                    # 只在极近距离才避让
+                    if obs_distance < 60:
+                        repulsion = 50.0 / max(obs_distance, 15)
+                        vx += repulsion * (dx_obs / obs_distance)
+                        vy += repulsion * (dy_obs / obs_distance)
 
-            vx += repulsion_force * (dx / distance)
-            vy += repulsion_force * (dy / distance)
+            elif target_distance > FINE_TUNE_THRESHOLD:
+                # 阶段2：快速平衡模式 - 快速移动 + 避障
+                attraction_force = min(
+                    target_distance / 20.0, 120.0
+                )  # 进一步提高上限和响应速度
+                vx = attraction_force * (dx / target_distance)
+                vy = attraction_force * (dy / target_distance)
 
-            # 如果黄色区域占据屏幕中心较大比例，增强斥力
-            image_area = image_width * image_height
-            yellow_ratio = yellow_area / image_area
-            if yellow_ratio > 0.1:  # 占据超过10%的屏幕
-                vx *= 2.5
-                vy *= 2.5
-            elif yellow_ratio > 0.05:  # 占据超过5%也增强
-                vx *= 1.5
-                vy *= 1.5
+                # Task 1时关闭避障，其他任务保留中等强度的障碍物避让
+                if TASK_ID != 1 and yellow_pos is not None:
+                    yellow_cx, yellow_cy = yellow_pos
+                    dy_obs = center_y - yellow_cy
+                    dx_obs = center_x - yellow_cx
+                    obs_distance = np.sqrt(dx_obs**2 + dy_obs**2)
 
-    return vx, vy
+                    if obs_distance > 0:
+                        area_factor = min(yellow_area / 1000.0, 3.0)
+                        repulsion_force = (200.0 / max(obs_distance, 50)) * (
+                            1 + area_factor
+                        )
+                        repulsion_force = min(repulsion_force, 12.0)
+
+                        vx += repulsion_force * (dx_obs / obs_distance)
+                        vy += repulsion_force * (dy_obs / obs_distance)
+
+            else:
+                # 阶段3：精确微调模式 - 完整势场法
+                attraction_force = min(target_distance / 80.0, 12.0)  # 中等力度
+                vx = attraction_force * (dx / target_distance)
+                vy = attraction_force * (dy / target_distance)
+
+                # Task 1时关闭避障，其他任务使用完整的势场法避障
+                if TASK_ID != 1 and yellow_pos is not None:
+                    yellow_cx, yellow_cy = yellow_pos
+                    dy_obs = center_y - yellow_cy
+                    dx_obs = center_x - yellow_cx
+                    obs_distance = np.sqrt(dx_obs**2 + dy_obs**2)
+
+                    if obs_distance > 0:
+                        area_factor = min(yellow_area / 800.0, 4.0)
+                        repulsion_force = (300.0 / max(obs_distance, 40)) * (
+                            1 + area_factor
+                        )
+                        repulsion_force = min(repulsion_force, 15.0)
+
+                        vx += repulsion_force * (dx_obs / obs_distance)
+                        vy += repulsion_force * (dy_obs / obs_distance)
+
+                        # 大面积障碍物增强
+                        image_area = image_width * image_height
+                        yellow_ratio = yellow_area / image_area
+                        if yellow_ratio > 0.1:
+                            vx *= 2.5
+                            vy *= 2.5
+                        elif yellow_ratio > 0.05:
+                            vx *= 1.5
+                            vy *= 1.5
+    else:
+        # 没有目标时，只做避障
+        if yellow_pos is not None:
+            yellow_cx, yellow_cy = yellow_pos
+            dx = center_x - yellow_cx
+            dy = center_y - yellow_cy
+            distance = np.sqrt(dx**2 + dy**2)
+
+            if distance > 0:
+                area_factor = min(yellow_area / 800.0, 4.0)
+                repulsion_force = (300.0 / max(distance, 40)) * (1 + area_factor)
+                repulsion_force = min(repulsion_force, 15.0)
+
+                vx += repulsion_force * (dx / distance)
+                vy += repulsion_force * (dy / distance)
+
+    return vx, vy, target_distance
 
 
-def send_control_command(vx, vy, threshold=0.3):
+def send_control_command(vx, vy, distance, threshold=0.3):
     """
-    根据控制向量发送控制指令
+    根据控制向量和距离发送控制指令（根据距离动态调整阈值）
 
     Args:
         vx: x方向的控制力（正值向右，负值向左）
         vy: y方向的控制力（正值向下，负值向上）
-        threshold: 触发指令的最小阈值（降低以增强响应）
+        distance: 与目标的距离
+        threshold: 触发指令的基础阈值
     """
+    # 根据距离动态调整阈值 - 距离越近，阈值越低，越灵敏
+    # 极低的阈值确保几乎任何偏移都会触发移动
+    if distance > 100:
+        # 远距离：极低阈值，确保持续移动
+        adjusted_threshold = 0.001
+    elif distance > 50:
+        # 中远距离：极低阈值
+        adjusted_threshold = 0.002
+    elif distance > 20:
+        # 中距离：极低阈值
+        adjusted_threshold = 0.003
+    elif distance > 5:
+        # 近距离：非常低的阈值，确保精确对准
+        adjusted_threshold = 0.005
+    else:
+        # 极近距离：几乎为0的阈值，只要有偏移就移动
+        adjusted_threshold = 0.001
+
     # 优先处理较大的分量
     abs_vx = abs(vx)
     abs_vy = abs(vy)
 
-    if abs_vx < threshold and abs_vy < threshold:
-        # 向量太小，不发送指令（目标已居中）
+    if abs_vx < adjusted_threshold and abs_vy < adjusted_threshold:
+        # 向量太小，目标已居中 - 必须发送NOOP避免管道卡死
+        print("NOOP", flush=True)
         return
 
     # 选择主导方向并发送指令
+    command = None
     if abs_vx > abs_vy:
         # 水平方向为主
-        if vx > threshold:
-            print("RIGHT", flush=True)
-        elif vx < -threshold:
-            print("LEFT", flush=True)
+        if vx > adjusted_threshold:
+            command = "RIGHT"
+        elif vx < -adjusted_threshold:
+            command = "LEFT"
     else:
         # 垂直方向为主
-        if vy > threshold:
-            print("DOWN", flush=True)
-        elif vy < -threshold:
-            print("UP", flush=True)
+        if vy > adjusted_threshold:
+            command = "DOWN"
+        elif vy < -adjusted_threshold:
+            command = "UP"
+
+    # 确保总是发送指令，避免管道卡死
+    if command:
+        print(command, flush=True)
+    else:
+        # 如果没有匹配到指令，发送NOOP
+        print("NOOP", flush=True)
 
 
 def process_image(image_path):
@@ -302,20 +397,21 @@ def process_image(image_path):
         # 计算控制向量
         red_pos = (red_cx, red_cy) if red_cx is not None else None
         yellow_pos = (yellow_cx, yellow_cy) if yellow_cx is not None else None
-        vx, vy = calculate_control_vector(
+        vx, vy, distance = calculate_control_vector(
             width, height, red_pos, yellow_pos, yellow_area
         )
 
-        # 发送控制指令
-        send_control_command(vx, vy, threshold=0.3)
+        # 发送控制指令（传入距离信息）
+        send_control_command(vx, vy, distance, threshold=0.3)
 
         # 删除PNG文件（在所有处理完成后立即删除）
-        if DELETE_PNG_AFTER_PROCESS and image_path.lower().endswith('.png'):
+        if DELETE_PNG_AFTER_PROCESS and image_path.lower().endswith(".png"):
             try:
                 os.remove(image_path)
-                log(f"已删除PNG文件: {image_path}")
-            except Exception as e:
-                log(f"删除PNG文件失败: {e}")
+                # 减少日志输出避免stderr缓冲区堵塞
+            except Exception:
+                # 静默处理删除失败
+                pass
 
         # 决定是否保存调试图像
         should_save_debug = SAVE_DEBUG_IMAGE and (
@@ -454,6 +550,8 @@ def main():
     """
     主函数 - 程序入口
     """
+    global TASK_ID
+
     # 从命令行参数读取任务ID（可选）
     task_id = 1  # 默认任务1（发挥部分：避障）
     debug_mode = True  # 默认开启调试
@@ -467,28 +565,50 @@ def main():
     if len(sys.argv) > 2:
         debug_mode = sys.argv[2].lower() in ["true", "1", "yes"]
 
+    # 设置全局任务ID
+    TASK_ID = task_id
+
     # 执行握手协议
     handshake(task_id=task_id, debug=debug_mode)
     sys.stderr.write("[System] 视觉伺服控制系统启动\n")
     sys.stderr.flush()
 
     # 主循环：持续读取 stdin 输入
-    while True:
-        # 读取图像路径
-        image_path = sys.stdin.readline().strip()
+    try:
+        counter = 0
+        while True:
+            # 读取图像路径
+            line = sys.stdin.readline()
 
-        print(f"Received image path: {image_path}", file=sys.stderr)
-        # 跳过空行
-        if not image_path:
-            continue
+            # 如果readline()返回空字符串，说明stdin已关闭（EOF），退出循环
+            if not line:
+                sys.stderr.write("[System] stdin已关闭，程序正常退出\n")
+                sys.stderr.flush()
+                break
 
-        # 每处理50张输出一次进度
-        if image_count > 0 and image_count % 50 == 0:
-            sys.stderr.write(f"[Progress] 已处理 {image_count} 张图像\n")
-            sys.stderr.flush()
+            image_path = line.strip()
+            log("Counter:{}".format(counter))
+            counter += 1
 
-        # 处理图像
-        process_image(image_path)
+            # 跳过空行（只是换行符的情况）
+            if not image_path:
+                continue
+
+            # 处理图像
+            try:
+                process_image(image_path)
+            except Exception as e:
+                # 处理单张图像失败不应导致整个程序崩溃
+                if VERBOSE_LOG:
+                    sys.stderr.write(f"[Error] 处理图像失败: {e}\n")
+                    sys.stderr.flush()
+                continue
+    except KeyboardInterrupt:
+        sys.stderr.write("\n[System] 程序被用户中断\n")
+        sys.stderr.flush()
+    except Exception as e:
+        sys.stderr.write(f"\n[Fatal] 程序异常退出: {e}\n")
+        sys.stderr.flush()
 
 
 if __name__ == "__main__":
