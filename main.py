@@ -8,22 +8,25 @@
 import sys
 import cv2
 import numpy as np
-import logging
 from pathlib import Path
+import os
+import gc
+
+# 配置选项
+SAVE_DEBUG_IMAGE = False  # 是否保存调试图像
+DEBUG_IMAGE_INTERVAL = 10  # 每N张保存一次调试图像（0表示每张都保存）
+VERBOSE_LOG = False  # 是否输出详细日志
+DELETE_PNG_AFTER_PROCESS = True  # 是否在处理后删除PNG文件
+
+# 全局计数器
+image_count = 0
 
 
-def setup_logging():
-    """
-    配置日志系统
-    所有日志输出到 stderr，避免干扰 stdout 的通信协议
-    """
-    logging.basicConfig(
-        level=logging.INFO,
-        format="[%(asctime)s] %(levelname)s: %(message)s",
-        datefmt="%H:%M:%S",
-        stream=sys.stderr,  # 关键：使用 stderr 输出日志，不干扰 stdout
-    )
-    return logging.getLogger(__name__)
+def log(msg):
+    """输出调试信息到 stderr，不影响 stdout 的控制指令"""
+    if VERBOSE_LOG:
+        sys.stderr.write(f"[Debug] {msg}\n")
+        sys.stderr.flush()
 
 
 def send_command(command):
@@ -36,22 +39,26 @@ def send_command(command):
     print(command, flush=True)  # flush=True 确保立即发送
 
 
-def handshake():
+def handshake(task_id=1, debug=True):
     """
     执行握手协议
     启动后立即发送必要的初始化信息
+
+    Args:
+        task_id: 任务ID (0/1/2/3)
+        debug: 是否开启调试模式
     """
-    send_command("debug=true")
-    send_command("task 0")
+    debug_mode = "true" if debug else "false"
+    print(f"debug={debug_mode}", flush=True)
+    print(f"task {task_id}", flush=True)
 
 
-def detect_yellow_obstacle(image, logger):
+def detect_yellow_obstacle(image):
     """
     检测图像中的黄色障碍物
 
     Args:
         image: OpenCV 读取的图像（BGR格式）
-        logger: 日志对象
 
     Returns:
         tuple: (cx, cy, contour, area) - 质心坐标、最大轮廓和面积，如果未找到则返回 (None, None, None, 0)
@@ -73,7 +80,6 @@ def detect_yellow_obstacle(image, logger):
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
     if not contours:
-        logger.debug("未检测到黄色障碍物")
         return None, None, None, 0
 
     # 5. 找到面积最大的轮廓
@@ -82,30 +88,25 @@ def detect_yellow_obstacle(image, logger):
 
     # 6. 筛选：面积太小则忽略
     if area < 100:
-        logger.debug(f"检测到的黄色区域面积太小: {area} 像素")
         return None, None, None, 0
 
     # 7. 计算质心
     M = cv2.moments(max_contour)
     if M["m00"] == 0:
-        logger.warning("无法计算黄色障碍物质心：m00为0")
         return None, None, None, area
 
     cx = int(M["m10"] / M["m00"])
     cy = int(M["m01"] / M["m00"])
 
-    logger.info(f"检测到黄色障碍物 - 质心: ({cx}, {cy}), 面积: {area:.0f} 像素")
-
     return cx, cy, max_contour, area
 
 
-def detect_red_target(image, logger):
+def detect_red_target(image):
     """
     检测图像中的红色标靶
 
     Args:
         image: OpenCV 读取的图像（BGR格式）
-        logger: 日志对象
 
     Returns:
         tuple: (cx, cy, contour) - 质心坐标和最大轮廓，如果未找到则返回 (None, None, None)
@@ -138,7 +139,6 @@ def detect_red_target(image, logger):
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
     if not contours:
-        logger.warning("未检测到红色区域")
         return None, None, None
 
     # 5. 找到面积最大的轮廓
@@ -147,25 +147,21 @@ def detect_red_target(image, logger):
 
     # 6. 筛选：面积太小则忽略
     if area < 100:
-        logger.warning(f"检测到的红色区域面积太小: {area} 像素")
         return None, None, None
 
     # 7. 计算质心（使用图像矩）
     M = cv2.moments(max_contour)
     if M["m00"] == 0:
-        logger.warning("无法计算质心：m00为0")
         return None, None, None
 
     cx = int(M["m10"] / M["m00"])
     cy = int(M["m01"] / M["m00"])
 
-    logger.info(f"检测到红色标靶 - 质心: ({cx}, {cy}), 面积: {area:.0f} 像素")
-
     return cx, cy, max_contour
 
 
 def calculate_control_vector(
-    image_width, image_height, red_pos, yellow_pos, yellow_area, logger
+    image_width, image_height, red_pos, yellow_pos, yellow_area
 ):
     """
     使用势场法计算控制向量
@@ -176,7 +172,6 @@ def calculate_control_vector(
         red_pos: 红色目标位置 (cx, cy)，如果为None则表示未检测到
         yellow_pos: 黄色障碍物位置 (cx, cy)，如果为None则表示未检测到
         yellow_area: 黄色障碍物面积
-        logger: 日志对象
 
     Returns:
         tuple: (vx, vy) - 控制向量（x方向和y方向的力）
@@ -198,12 +193,9 @@ def calculate_control_vector(
 
         if distance > 0:
             # 引力大小与距离成正比（距离越远，引力越大）
-            attraction_force = min(distance / 100.0, 5.0)  # 限制最大引力
+            attraction_force = min(distance / 100.0, 30.0)  # 增大引力系数和上限
             vx += attraction_force * (dx / distance)
             vy += attraction_force * (dy / distance)
-            logger.debug(
-                f"红色引力向量: ({attraction_force * (dx / distance):.2f}, {attraction_force * (dy / distance):.2f})"
-            )
 
     # 2. 黄色障碍物产生斥力（排斥远离）
     if yellow_pos is not None:
@@ -216,36 +208,34 @@ def calculate_control_vector(
         if distance > 0:
             # 斥力与距离成反比（距离越近，斥力越大）
             # 同时考虑障碍物面积，面积越大斥力越强
-            area_factor = min(yellow_area / 1000.0, 3.0)  # 面积影响因子
-            repulsion_force = (200.0 / max(distance, 50)) * (1 + area_factor)
-            repulsion_force = min(repulsion_force, 10.0)  # 限制最大斥力
+            area_factor = min(yellow_area / 800.0, 4.0)  # 增强面积影响
+            repulsion_force = (300.0 / max(distance, 40)) * (1 + area_factor)
+            repulsion_force = min(repulsion_force, 15.0)  # 增大最大斥力
 
             vx += repulsion_force * (dx / distance)
             vy += repulsion_force * (dy / distance)
-            logger.debug(
-                f"黄色斥力向量: ({repulsion_force * (dx / distance):.2f}, {repulsion_force * (dy / distance):.2f})"
-            )
 
             # 如果黄色区域占据屏幕中心较大比例，增强斥力
             image_area = image_width * image_height
             yellow_ratio = yellow_area / image_area
             if yellow_ratio > 0.1:  # 占据超过10%的屏幕
-                logger.warning(f"黄色障碍物占据屏幕 {yellow_ratio*100:.1f}%，增强斥力")
-                vx *= 2.0
-                vy *= 2.0
+                vx *= 2.5
+                vy *= 2.5
+            elif yellow_ratio > 0.05:  # 占据超过5%也增强
+                vx *= 1.5
+                vy *= 1.5
 
-    logger.info(f"最终控制向量: ({vx:.2f}, {vy:.2f})")
     return vx, vy
 
 
-def send_control_command(vx, vy, threshold=0.5):
+def send_control_command(vx, vy, threshold=0.3):
     """
     根据控制向量发送控制指令
 
     Args:
         vx: x方向的控制力（正值向右，负值向左）
         vy: y方向的控制力（正值向下，负值向上）
-        threshold: 触发指令的最小阈值
+        threshold: 触发指令的最小阈值（降低以增强响应）
     """
     # 优先处理较大的分量
     abs_vx = abs(vx)
@@ -253,63 +243,92 @@ def send_control_command(vx, vy, threshold=0.5):
 
     if abs_vx < threshold and abs_vy < threshold:
         # 向量太小，不发送指令（目标已居中）
-        send_command("HOLD")
         return
 
-    # 选择主导方向
+    # 选择主导方向并发送指令
     if abs_vx > abs_vy:
         # 水平方向为主
         if vx > threshold:
-            send_command("RIGHT")
+            print("RIGHT", flush=True)
         elif vx < -threshold:
-            send_command("LEFT")
+            print("LEFT", flush=True)
     else:
         # 垂直方向为主
         if vy > threshold:
-            send_command("DOWN")
+            print("DOWN", flush=True)
         elif vy < -threshold:
-            send_command("UP")
+            print("UP", flush=True)
 
 
-def process_image(image_path, logger):
+def process_image(image_path):
     """
     处理单张图像
 
     Args:
         image_path: 图像文件的绝对路径
-        logger: 日志对象
 
     Returns:
         bool: 处理是否成功
     """
+    global image_count
+    image_count += 1
+
     try:
         # 检查文件是否存在
         if not Path(image_path).exists():
-            logger.error(f"图像文件不存在: {image_path}")
             return False
 
         # 使用 OpenCV 读取图像
         image = cv2.imread(image_path)
 
         if image is None:
-            logger.error(f"无法读取图像: {image_path}")
             return False
 
         # 记录图像信息
         height, width = image.shape[:2]
-        logger.info(f"Image received - 尺寸: {width}x{height}")
 
         # ==========================================
         # Task 3: 视觉处理 - 检测目标和障碍物
         # ==========================================
 
         # 检测红色标靶（目标）
-        red_cx, red_cy, red_contour = detect_red_target(image, logger)
+        red_cx, red_cy, red_contour = detect_red_target(image)
 
         # 检测黄色障碍物
         yellow_cx, yellow_cy, yellow_contour, yellow_area = detect_yellow_obstacle(
-            image, logger
+            image
         )
+
+        # 计算控制向量
+        red_pos = (red_cx, red_cy) if red_cx is not None else None
+        yellow_pos = (yellow_cx, yellow_cy) if yellow_cx is not None else None
+        vx, vy = calculate_control_vector(
+            width, height, red_pos, yellow_pos, yellow_area
+        )
+
+        # 发送控制指令
+        send_control_command(vx, vy, threshold=0.3)
+
+        # 删除PNG文件（在所有处理完成后立即删除）
+        if DELETE_PNG_AFTER_PROCESS and image_path.lower().endswith('.png'):
+            try:
+                os.remove(image_path)
+                log(f"已删除PNG文件: {image_path}")
+            except Exception as e:
+                log(f"删除PNG文件失败: {e}")
+
+        # 决定是否保存调试图像
+        should_save_debug = SAVE_DEBUG_IMAGE and (
+            DEBUG_IMAGE_INTERVAL == 0
+            or image_count % DEBUG_IMAGE_INTERVAL == 0
+            or (red_cx is not None or yellow_cx is not None)  # 有目标时保存
+        )
+
+        if not should_save_debug:
+            # 释放内存
+            del image
+            gc.collect()
+            return True
 
         # 创建调试图像
         debug_image = image.copy()
@@ -387,17 +406,6 @@ def process_image(image_path, logger):
                 2,
             )
 
-        # ==========================================
-        # Task 3: 势场法控制逻辑
-        # ==========================================
-        red_pos = (red_cx, red_cy) if red_cx is not None else None
-        yellow_pos = (yellow_cx, yellow_cy) if yellow_cx is not None else None
-
-        # 计算控制向量
-        vx, vy = calculate_control_vector(
-            width, height, red_pos, yellow_pos, yellow_area, logger
-        )
-
         # 在调试图像上绘制控制向量（从中心出发的箭头）
         if abs(vx) > 0.1 or abs(vy) > 0.1:
             arrow_scale = 20  # 箭头长度缩放
@@ -412,18 +420,33 @@ def process_image(image_path, logger):
                 tipLength=0.3,
             )
 
-        # 根据控制向量发送指令
-        send_control_command(vx, vy, threshold=0.5)
-
         # 保存调试图像
         debug_path = "debug.jpg"
         cv2.imwrite(debug_path, debug_image)
-        logger.info(f"调试图像已保存: {debug_path}")
+
+        # 释放内存
+        del image
+        del debug_image
+        gc.collect()
 
         return True
 
     except Exception as e:
-        logger.error(f"处理图像时发生异常: {e}", exc_info=True)
+        # 发生异常时也要释放内存
+        if "image" in locals():
+            del image
+        if "debug_image" in locals():
+            del debug_image
+        gc.collect()
+
+        # 异常时也尝试删除PNG文件
+        if DELETE_PNG_AFTER_PROCESS and image_path.lower().endswith(".png"):
+            try:
+                if Path(image_path).exists():
+                    os.remove(image_path)
+            except:
+                pass
+
         return False
 
 
@@ -431,38 +454,41 @@ def main():
     """
     主函数 - 程序入口
     """
-    # 初始化日志系统
-    logger = setup_logging()
-    logger.info("视觉伺服控制系统启动")
+    # 从命令行参数读取任务ID（可选）
+    task_id = 1  # 默认任务1（发挥部分：避障）
+    debug_mode = True  # 默认开启调试
 
-    try:
-        # 执行握手协议
-        handshake()
-        logger.info("握手协议完成")
+    if len(sys.argv) > 1:
+        try:
+            task_id = int(sys.argv[1])
+        except ValueError:
+            pass
 
-        # 主循环：持续读取 stdin 输入
-        logger.info("进入主循环，等待图像路径...")
+    if len(sys.argv) > 2:
+        debug_mode = sys.argv[2].lower() in ["true", "1", "yes"]
 
-        for line in sys.stdin:
-            # 去除行尾的换行符和空格
-            image_path = line.strip()
+    # 执行握手协议
+    handshake(task_id=task_id, debug=debug_mode)
+    sys.stderr.write("[System] 视觉伺服控制系统启动\n")
+    sys.stderr.flush()
 
-            # 跳过空行
-            if not image_path:
-                continue
+    # 主循环：持续读取 stdin 输入
+    while True:
+        # 读取图像路径
+        image_path = sys.stdin.readline().strip()
 
-            logger.info(f"接收到图像路径: {image_path}")
+        print(f"Received image path: {image_path}", file=sys.stderr)
+        # 跳过空行
+        if not image_path:
+            continue
 
-            # 处理图像
-            process_image(image_path, logger)
+        # 每处理50张输出一次进度
+        if image_count > 0 and image_count % 50 == 0:
+            sys.stderr.write(f"[Progress] 已处理 {image_count} 张图像\n")
+            sys.stderr.flush()
 
-    except KeyboardInterrupt:
-        logger.info("接收到中断信号，程序退出")
-    except Exception as e:
-        logger.error(f"主循环发生异常: {e}", exc_info=True)
-        sys.exit(1)
-    finally:
-        logger.info("程序结束")
+        # 处理图像
+        process_image(image_path)
 
 
 if __name__ == "__main__":
