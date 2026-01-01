@@ -1,0 +1,302 @@
+[
+  {
+    "task_id": 1,
+    "test_number": 1,
+    "timestamp": "2026-01-01T19:16:17.196611",
+    "execution_time": 24.676356077194214,
+    "target_detected_count": 140,
+    "obstacle_detected_count": 0,
+    "success": true,
+    "timeout": 120
+  },
+  {
+    "task_id": 1,
+    "test_number": 2,
+    "timestamp": "2026-01-01T19:16:37.687553",
+    "execution_time": 18.490247011184692,
+    "target_detected_count": 104,
+    "obstacle_detected_count": 0,
+    "success": true,
+    "timeout": 120
+  },
+  {
+    "task_id": 1,
+    "test_number": 3,
+    "timestamp": "2026-01-01T19:17:03.605184",
+    "execution_time": 23.91698980331421,
+    "target_detected_count": 134,
+    "obstacle_detected_count": 0,
+    "success": true,
+    "timeout": 120
+  },
+  {
+    "task_id": 1,
+    "test_number": 4,
+    "timestamp": "2026-01-01T19:17:34.790391",
+    "execution_time": 29.184172868728638,
+    "target_detected_count": 165,
+    "obstacle_detected_count": 0,
+    "success": true,
+    "timeout": 120
+  },
+  {
+    "task_id": 1,
+    "test_number": 5,
+    "timestamp": "2026-01-01T19:18:08.658455",
+    "execution_time": 31.86725401878357,
+    "target_detected_count": 165,
+    "obstacle_detected_count": 0,
+    "success": true,
+    "timeout": 120
+  },
+  {
+    "task_id": 1,
+    "test_number": 6,
+    "timestamp": "2026-01-01T19:18:35.565060",
+    "execution_time": 24.905669689178467,
+    "target_detected_count": 121,
+    "obstacle_detected_count": 0,
+    "success": true,
+    "timeout": 120
+  },
+  {
+    "task_id": 1,
+    "test_number": 7,
+    "timestamp": "2026-01-01T19:19:16.722264",
+    "execution_time": 39.15601992607117,
+    "target_detected_count": 204,
+    "obstacle_detected_count": 0,
+    "success": true,
+    "timeout": 120
+  },
+  {
+    "task_id": 1,
+    "test_number": 8,
+    "timestamp": "2026-01-01T19:19:43.153670",
+    "execution_time": 24.43025255203247,
+    "target_detected_count": 139,
+    "obstacle_detected_count": 0,
+    "success": true,
+    "timeout": 120
+  },
+  {
+    "task_id": 1,
+    "test_number": 9,
+    "timestamp": "2026-01-01T19:20:04.401869",
+    "execution_time": 19.247076272964478,
+    "target_detected_count": 108,
+    "obstacle_detected_count": 0,
+    "success": true,
+    "timeout": 120
+  },
+  {
+    "task_id": 1,
+    "test_number": 10,
+    "timestamp": "2026-01-01T19:20:25.811135",
+    "execution_time": 19.408439874649048,
+    "target_detected_count": 103,
+    "obstacle_detected_count": 0,
+    "success": true,
+    "timeout": 120
+  },
+  {
+    "task_id": 2,
+    "test_number": 1,
+    "timestamp": "2026-01-01T19:20:38.977174",
+    "execution_time": 8.164608716964722,
+    "target_detected_count": 43,
+    "obstacle_detected_count": 0,
+    "success": true,
+    "timeout": 150
+  },
+  {
+    "task_id": 2,
+    "test_number": 2,
+    "timestamp": "2026-01-01T19:20:49.131025",
+    "execution_time": 8.153110027313232,
+    "target_detected_count": 43,
+    "obstacle_detected_count": 0,
+    "success": true,
+    "timeout": 150
+  },
+  {
+    "task_id": 2,
+    "test_number": 3,
+    "timestamp": "2026-01-01T19:20:59.256444",
+    "execution_time": 8.124101400375366,
+    "target_detected_count": 43,
+    "obstacle_detected_count": 0,
+    "success": true,
+    "timeout": 150
+  },
+  {
+    "task_id": 2,
+    "test_number": 4,
+    "timestamp": "2026-01-01T19:21:09.352150",
+    "execution_time": 8.095011949539185,
+    "target_detected_count": 43,
+    "obstacle_detected_count": 0,
+    "success": true,
+    "timeout": 150
+  },
+  {
+    "task_id": 2,
+    "test_number": 5,
+    "timestamp": "2026-01-01T19:21:19.905596",
+    "execution_time": 8.552734136581421,
+    "target_detected_count": 43,
+    "obstacle_detected_count": 0,
+    "success": true,
+    "timeout": 150
+  },
+  {
+    "task_id": 2,
+    "test_number": 6,
+    "timestamp": "2026-01-01T19:21:30.108423",
+    "execution_time": 8.202081203460693,
+    "target_detected_count": 43,
+    "obstacle_detected_count": 0,
+    "success": true,
+    "timeout": 150
+  },
+  {
+    "task_id": 2,
+    "test_number": 7,
+    "timestamp": "2026-01-01T19:21:40.213755",
+    "execution_time": 8.104592561721802,
+    "target_detected_count": 43,
+    "obstacle_detected_count": 0,
+    "success": true,
+    "timeout": 150
+  },
+  {
+    "task_id": 2,
+    "test_number": 8,
+    "timestamp": "2026-01-01T19:21:50.350853",
+    "execution_time": 8.135785818099976,
+    "target_detected_count": 43,
+    "obstacle_detected_count": 0,
+    "success": true,
+    "timeout": 150
+  },
+  {
+    "task_id": 2,
+    "test_number": 9,
+    "timestamp": "2026-01-01T19:22:00.741535",
+    "execution_time": 8.389256715774536,
+    "target_detected_count": 43,
+    "obstacle_detected_count": 0,
+    "success": true,
+    "timeout": 150
+  },
+  {
+    "task_id": 2,
+    "test_number": 10,
+    "timestamp": "2026-01-01T19:22:10.914481",
+    "execution_time": 8.172303676605225,
+    "target_detected_count": 43,
+    "obstacle_detected_count": 0,
+    "success": true,
+    "timeout": 150
+  },
+  {
+    "task_id": 3,
+    "test_number": 1,
+    "timestamp": "2026-01-01T19:22:46.392340",
+    "execution_time": 30.475476264953613,
+    "target_detected_count": 173,
+    "obstacle_detected_count": 173,
+    "success": true,
+    "timeout": 180
+  },
+  {
+    "task_id": 3,
+    "test_number": 2,
+    "timestamp": "2026-01-01T19:23:17.213481",
+    "execution_time": 28.82033348083496,
+    "target_detected_count": 157,
+    "obstacle_detected_count": 157,
+    "success": true,
+    "timeout": 180
+  },
+  {
+    "task_id": 3,
+    "test_number": 3,
+    "timestamp": "2026-01-01T19:23:41.691129",
+    "execution_time": 22.476709365844727,
+    "target_detected_count": 126,
+    "obstacle_detected_count": 126,
+    "success": true,
+    "timeout": 180
+  },
+  {
+    "task_id": 3,
+    "test_number": 4,
+    "timestamp": "2026-01-01T19:24:13.638942",
+    "execution_time": 29.946234464645386,
+    "target_detected_count": 171,
+    "obstacle_detected_count": 171,
+    "success": true,
+    "timeout": 180
+  },
+  {
+    "task_id": 3,
+    "test_number": 5,
+    "timestamp": "2026-01-01T19:24:42.165246",
+    "execution_time": 26.52549409866333,
+    "target_detected_count": 150,
+    "obstacle_detected_count": 150,
+    "success": true,
+    "timeout": 180
+  },
+  {
+    "task_id": 3,
+    "test_number": 6,
+    "timestamp": "2026-01-01T19:25:15.363303",
+    "execution_time": 31.196866035461426,
+    "target_detected_count": 175,
+    "obstacle_detected_count": 175,
+    "success": true,
+    "timeout": 180
+  },
+  {
+    "task_id": 3,
+    "test_number": 7,
+    "timestamp": "2026-01-01T19:25:50.438899",
+    "execution_time": 33.074918270111084,
+    "target_detected_count": 186,
+    "obstacle_detected_count": 186,
+    "success": true,
+    "timeout": 180
+  },
+  {
+    "task_id": 3,
+    "test_number": 8,
+    "timestamp": "2026-01-01T19:26:25.920940",
+    "execution_time": 33.48108768463135,
+    "target_detected_count": 177,
+    "obstacle_detected_count": 177,
+    "success": true,
+    "timeout": 180
+  },
+  {
+    "task_id": 3,
+    "test_number": 9,
+    "timestamp": "2026-01-01T19:26:55.347276",
+    "execution_time": 27.425506114959717,
+    "target_detected_count": 150,
+    "obstacle_detected_count": 150,
+    "success": true,
+    "timeout": 180
+  },
+  {
+    "task_id": 3,
+    "test_number": 10,
+    "timestamp": "2026-01-01T19:27:32.444499",
+    "execution_time": 35.09625577926636,
+    "target_detected_count": 200,
+    "obstacle_detected_count": 200,
+    "success": true,
+    "timeout": 180
+  }
+]
