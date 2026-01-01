@@ -52,7 +52,7 @@ def handshake(task_id=1, debug=True):
     """
     # debug_mode = "true" if debug else "false"
     # log("Debug mode: " + debug_mode)
-    print(f"debug=true", flush=True)
+    print(f"debug=false", flush=True)
     print(f"task {task_id}", flush=True)
     
     # Task 0: 发送姓名
