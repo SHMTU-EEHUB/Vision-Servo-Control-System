@@ -54,6 +54,13 @@ def handshake(task_id=1, debug=True):
     # log("Debug mode: " + debug_mode)
     print(f"debug=true", flush=True)
     print(f"task {task_id}", flush=True)
+    
+    # Task 0: 发送姓名
+    if task_id == 0:
+        print("缪旭", flush=True)
+        log("Sent name for task 0")
+        print("202510322027",flush=True)
+        log("Sent student ID for task 0")
 
 
 def detect_yellow_obstacle(image):
@@ -184,6 +191,10 @@ def calculate_control_vector(
     # 初始化控制向量
     vx, vy = 0.0, 0.0
     target_distance = 0
+    
+    log(f"=== Task {TASK_ID} ===")
+    log(f"Red target: {red_pos}")
+    log(f"Yellow obstacle: {yellow_pos}, Area: {yellow_area}")
 
     # 1. 红色目标产生引力（吸引云台中心靠近）
     if red_pos is not None:
@@ -225,82 +236,189 @@ def calculate_control_vector(
                 vy = gain * float(dy)
             
             else:
-                # === Task 3等：使用势场法 + 避障 ===
+                # === Task 3等：使用势场法 + 安全区域避障 ===
+                log(f"Task 3: Target distance = {target_distance:.1f}")
+                
                 # 定义距离阈值
                 FAST_APPROACH_THRESHOLD = 150
                 FINE_TUNE_THRESHOLD = 30
                 
+                # 定义准心安全区域（正方形）
+                SAFETY_ZONE_SIZE = 150  # 扩大到150像素，更早触发避障
+                
+                # 检查障碍物是否在安全区域内
+                obstacle_in_safety_zone = False
+                bypass_vx = 0  # 绕行向量
+                bypass_vy = 0
+                
+                if yellow_pos is not None:
+                    yellow_cx, yellow_cy = yellow_pos
+                    dx_obs = yellow_cx - center_x
+                    dy_obs = yellow_cy - center_y
+                    obs_dist_check = np.sqrt(dx_obs**2 + dy_obs**2)
+                    
+                    log(f"Obstacle relative pos: dx={dx_obs:.1f}, dy={dy_obs:.1f}, dist={obs_dist_check:.1f}")
+                    
+                    # 如果障碍物在安全区域内
+                    if abs(dx_obs) < SAFETY_ZONE_SIZE and abs(dy_obs) < SAFETY_ZONE_SIZE:
+                        obstacle_in_safety_zone = True
+                        log(f"!!! OBSTACLE IN SAFETY ZONE !!! Size={SAFETY_ZONE_SIZE}")
+                        
+                        # 智能绕行策略：判断障碍物在目标路径的哪一侧
+                        # 使用叉积：cross = dx * dy_obs - dy * dx_obs
+                        # cross > 0: 障碍物在路径左侧，向右绕行
+                        # cross < 0: 障碍物在路径右侧，向左绕行
+                        cross_product = dx * dy_obs - dy * dx_obs
+                        
+                        # 计算切向量（垂直于中心->目标的方向）
+                        # 向右的切向量: (dy, -dx)
+                        # 向左的切向量: (-dy, dx)
+                        tangent_len = max(np.sqrt(dx**2 + dy**2), 1.0)
+                        
+                        if cross_product > 0:
+                            # 障碍物在左侧，向右绕行
+                            bypass_vx = dy / tangent_len
+                            bypass_vy = -dx / tangent_len
+                            log(f"Bypass RIGHT (obstacle on left), cross={cross_product:.1f}")
+                        else:
+                            # 障碍物在右侧，向左绕行
+                            bypass_vx = -dy / tangent_len
+                            bypass_vy = dx / tangent_len
+                            log(f"Bypass LEFT (obstacle on right), cross={cross_product:.1f}")
+                        
+                        log(f"Tangent vector: vx={bypass_vx:.3f}, vy={bypass_vy:.3f}")
+                else:
+                    log("No obstacle detected")
+                
                 if target_distance > FAST_APPROACH_THRESHOLD:
-                    # 阶段1：极限速度模式
-                    attraction_force = 2000.0
-                    vx = attraction_force * (dx / target_distance)
-                    vy = attraction_force * (dy / target_distance)
+                    log("Stage 1: Far distance")
+                    # 阶段1：快速接近模式
+                    if obstacle_in_safety_zone:
+                        # 障碍物在安全区域内：避障优先
+                        bypass_force = 4000.0  # 大幅增强绕行力
+                        target_force = 300.0   # 降低目标力
+                        
+                        vx = bypass_force * bypass_vx + target_force * (dx / target_distance)
+                        vy = bypass_force * bypass_vy + target_force * (dy / target_distance)
+                        log(f"BYPASS MODE: bypass_force={bypass_force}, target_force={target_force}")
+                        log(f"Combined vector: vx={vx:.1f}, vy={vy:.1f}")
+                    else:
+                        # 正常追踪目标
+                        attraction_force = 600.0  # 进一步降低吸引力
+                        vx = attraction_force * (dx / target_distance)
+                        vy = attraction_force * (dy / target_distance)
+                        log(f"Attraction: force={attraction_force}, vx={vx:.1f}, vy={vy:.1f}")
 
-                    # 障碍物避让
-                    if yellow_pos is not None:
-                        yellow_cx, yellow_cy = yellow_pos
-                        dy_obs = center_y - yellow_cy
-                        dx_obs = center_x - yellow_cx
-                        obs_distance = np.sqrt(dx_obs**2 + dy_obs**2)
+                        # 远距离预防性避障 - 增强
+                        if yellow_pos is not None:
+                            yellow_cx, yellow_cy = yellow_pos
+                            dy_obs = center_y - yellow_cy
+                            dx_obs = center_x - yellow_cx
+                            obs_distance = np.sqrt(dx_obs**2 + dy_obs**2)
+                            log(f"Obstacle distance: {obs_distance:.1f}")
 
-                        if obs_distance < 60:
-                            repulsion = 50.0 / max(obs_distance, 15)
-                            vx += repulsion * (dx_obs / obs_distance)
-                            vy += repulsion * (dy_obs / obs_distance)
+                            if obs_distance < 250:  # 扩大预防范围
+                                # 增强斥力，考虑障碍物面积
+                                area_factor = min(yellow_area / 300.0, 10.0)
+                                repulsion = (1200.0 / max(obs_distance, 2)) * (1 + area_factor)
+                                rep_vx = repulsion * (dx_obs / obs_distance)
+                                rep_vy = repulsion * (dy_obs / obs_distance)
+                                vx += rep_vx
+                                vy += rep_vy
+                                log(f"Repulsion applied: rep={repulsion:.1f}, rep_vx={rep_vx:.1f}, rep_vy={rep_vy:.1f}")
+                                log(f"Final vector: vx={vx:.1f}, vy={vy:.1f}")
 
                 elif target_distance > FINE_TUNE_THRESHOLD:
-                    # 阶段2：快速平衡模式
-                    attraction_force = min(target_distance / 20.0, 120.0)
-                    vx = attraction_force * (dx / target_distance)
-                    vy = attraction_force * (dy / target_distance)
+                    log("Stage 2: Medium distance")
+                    # 阶段2：平衡模式
+                    if obstacle_in_safety_zone:
+                        # 障碍物在安全区域内：避障优先
+                        bypass_force = 3000.0
+                        target_force = 200.0
+                        
+                        vx = bypass_force * bypass_vx + target_force * (dx / target_distance)
+                        vy = bypass_force * bypass_vy + target_force * (dy / target_distance)
+                        log(f"BYPASS MODE: bypass_force={bypass_force}, target_force={target_force}")
+                        log(f"Combined vector: vx={vx:.1f}, vy={vy:.1f}")
+                    else:
+                        attraction_force = min(target_distance / 30.0, 80.0)
+                        vx = attraction_force * (dx / target_distance)
+                        vy = attraction_force * (dy / target_distance)
+                        log(f"Attraction: force={attraction_force:.1f}, vx={vx:.1f}, vy={vy:.1f}")
 
-                    if yellow_pos is not None:
-                        yellow_cx, yellow_cy = yellow_pos
-                        dy_obs = center_y - yellow_cy
-                        dx_obs = center_x - yellow_cx
-                        obs_distance = np.sqrt(dx_obs**2 + dy_obs**2)
+                        if yellow_pos is not None:
+                            yellow_cx, yellow_cy = yellow_pos
+                            dy_obs = center_y - yellow_cy
+                            dx_obs = center_x - yellow_cx
+                            obs_distance = np.sqrt(dx_obs**2 + dy_obs**2)
+                            log(f"Obstacle distance: {obs_distance:.1f}")
 
-                        if obs_distance > 0:
-                            area_factor = min(yellow_area / 1000.0, 3.0)
-                            repulsion_force = (200.0 / max(obs_distance, 50)) * (
-                                1 + area_factor
-                            )
-                            repulsion_force = min(repulsion_force, 12.0)
+                            if obs_distance < 180:
+                                # 增强面积因子和斥力
+                                area_factor = min(yellow_area / 300.0, 10.0)
+                                repulsion_force = (1500.0 / max(obs_distance, 5)) * (
+                                    1 + area_factor
+                                )
+                                repulsion_force = min(repulsion_force, 80.0)
 
-                            vx += repulsion_force * (dx_obs / obs_distance)
-                            vy += repulsion_force * (dy_obs / obs_distance)
+                                rep_vx = repulsion_force * (dx_obs / obs_distance)
+                                rep_vy = repulsion_force * (dy_obs / obs_distance)
+                                vx += rep_vx
+                                vy += rep_vy
+                                log(f"Repulsion: force={repulsion_force:.1f}, rep_vx={rep_vx:.1f}, rep_vy={rep_vy:.1f}")
+                                log(f"Final vector: vx={vx:.1f}, vy={vy:.1f}")
 
                 else:
+                    log("Stage 3: Close distance")
                     # 阶段3：精确微调模式
-                    attraction_force = min(target_distance / 80.0, 12.0)
-                    vx = attraction_force * (dx / target_distance)
-                    vy = attraction_force * (dy / target_distance)
+                    if obstacle_in_safety_zone:
+                        # 障碍物在安全区域内：避障优先
+                        bypass_force = 2000.0
+                        target_force = 100.0
+                        
+                        vx = bypass_force * bypass_vx + target_force * (dx / target_distance)
+                        vy = bypass_force * bypass_vy + target_force * (dy / target_distance)
+                        log(f"BYPASS MODE: bypass_force={bypass_force}, target_force={target_force}")
+                        log(f"Combined vector: vx={vx:.1f}, vy={vy:.1f}")
+                    else:
+                        attraction_force = min(target_distance / 80.0, 12.0)
+                        vx = attraction_force * (dx / target_distance)
+                        vy = attraction_force * (dy / target_distance)
+                        log(f"Attraction: force={attraction_force:.1f}, vx={vx:.1f}, vy={vy:.1f}")
 
-                    if yellow_pos is not None:
-                        yellow_cx, yellow_cy = yellow_pos
-                        dy_obs = center_y - yellow_cy
-                        dx_obs = center_x - yellow_cx
-                        obs_distance = np.sqrt(dx_obs**2 + dy_obs**2)
+                        if yellow_pos is not None:
+                            yellow_cx, yellow_cy = yellow_pos
+                            dy_obs = center_y - yellow_cy
+                            dx_obs = center_x - yellow_cx
+                            obs_distance = np.sqrt(dx_obs**2 + dy_obs**2)
+                            log(f"Obstacle distance: {obs_distance:.1f}")
 
-                        if obs_distance > 0:
-                            area_factor = min(yellow_area / 800.0, 4.0)
-                            repulsion_force = (300.0 / max(obs_distance, 40)) * (
-                                1 + area_factor
-                            )
-                            repulsion_force = min(repulsion_force, 15.0)
+                            if obs_distance < 120:
+                                # 近距离强化避障
+                                area_factor = min(yellow_area / 300.0, 8.0)
+                                repulsion_force = (1200.0 / max(obs_distance, 10)) * (
+                                    1 + area_factor
+                                )
+                                repulsion_force = min(repulsion_force, 60.0)
 
-                            vx += repulsion_force * (dx_obs / obs_distance)
-                            vy += repulsion_force * (dy_obs / obs_distance)
+                                rep_vx = repulsion_force * (dx_obs / obs_distance)
+                                rep_vy = repulsion_force * (dy_obs / obs_distance)
+                                vx += rep_vx
+                                vy += rep_vy
+                                log(f"Repulsion: force={repulsion_force:.1f}, rep_vx={rep_vx:.1f}, rep_vy={rep_vy:.1f}")
 
-                            # 大面积障碍物增强
-                            image_area = image_width * image_height
-                            yellow_ratio = yellow_area / image_area
-                            if yellow_ratio > 0.1:
-                                vx *= 2.5
-                                vy *= 2.5
-                            elif yellow_ratio > 0.05:
-                                vx *= 1.5
-                                vy *= 1.5
+                                # 大面积障碍物增强
+                                image_area = image_width * image_height
+                                yellow_ratio = yellow_area / image_area
+                                if yellow_ratio > 0.1:
+                                    vx *= 5.0
+                                    vy *= 5.0
+                                    log(f"Large obstacle boost: 5.0x")
+                                elif yellow_ratio > 0.05:
+                                    vx *= 3.0
+                                    vy *= 3.0
+                                    log(f"Medium obstacle boost: 3.0x")
+                                log(f"Final vector: vx={vx:.1f}, vy={vy:.1f}")
     else:
         # 没有目标时，只做避障
         if yellow_pos is not None:
@@ -581,7 +699,7 @@ def main():
     global TASK_ID
 
     # 从命令行参数读取任务ID（可选）
-    task_id = 3  # 默认任务1（发挥部分：避障）
+    task_id = 0  # 默认任务1（发挥部分：避障）
     debug_mode = True  # 默认开启调试
 
     if len(sys.argv) > 1:
